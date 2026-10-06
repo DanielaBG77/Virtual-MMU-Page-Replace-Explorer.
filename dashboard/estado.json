@@ -1,0 +1,25 @@
+{
+  "algoritmo": "lru",
+  "marcos": 3,
+  "tamTLB": 4,
+  "paso": 12,
+  "total": 12,
+  "terminado": true,
+  "metricas": {"accesos": 12, "tlbHits": 2, "tlbMisses": 10, "pageFaults": 10},
+  "marcosEstado": [3, 4, 5],
+  "tlbEstado": [{"pagina": 3, "marco": 0}, {"pagina": 4, "marco": 1}, {"pagina": 5, "marco": 2}],
+  "historial": [
+    {"paso": 1, "pagina": 1, "tlbHit": false, "fallo": true, "marco": 0, "dirLogica": 4096, "dirFisica": 0, "victima": -1},
+    {"paso": 2, "pagina": 2, "tlbHit": false, "fallo": true, "marco": 1, "dirLogica": 8229, "dirFisica": 4133, "victima": -1},
+    {"paso": 3, "pagina": 3, "tlbHit": false, "fallo": true, "marco": 2, "dirLogica": 12362, "dirFisica": 8266, "victima": -1},
+    {"paso": 4, "pagina": 4, "tlbHit": false, "fallo": true, "marco": 0, "dirLogica": 16495, "dirFisica": 111, "victima": 1},
+    {"paso": 5, "pagina": 1, "tlbHit": false, "fallo": true, "marco": 1, "dirLogica": 4244, "dirFisica": 4244, "victima": 2},
+    {"paso": 6, "pagina": 2, "tlbHit": false, "fallo": true, "marco": 2, "dirLogica": 8377, "dirFisica": 8377, "victima": 3},
+    {"paso": 7, "pagina": 5, "tlbHit": false, "fallo": true, "marco": 0, "dirLogica": 20702, "dirFisica": 222, "victima": 4},
+    {"paso": 8, "pagina": 1, "tlbHit": true, "fallo": false, "marco": 1, "dirLogica": 4355, "dirFisica": 4355, "victima": -1},
+    {"paso": 9, "pagina": 2, "tlbHit": true, "fallo": false, "marco": 2, "dirLogica": 8488, "dirFisica": 8488, "victima": -1},
+    {"paso": 10, "pagina": 3, "tlbHit": false, "fallo": true, "marco": 0, "dirLogica": 12621, "dirFisica": 333, "victima": 5},
+    {"paso": 11, "pagina": 4, "tlbHit": false, "fallo": true, "marco": 1, "dirLogica": 16754, "dirFisica": 4466, "victima": 1},
+    {"paso": 12, "pagina": 5, "tlbHit": false, "fallo": true, "marco": 2, "dirLogica": 20887, "dirFisica": 8599, "victima": 2}
+  ]
+}

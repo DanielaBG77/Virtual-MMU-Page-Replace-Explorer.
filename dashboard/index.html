@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Virtual MMU Page Replace Explorer</title>
+<style>
+  :root { --bg:#f5f6fa; --card:#fff; --txt:#1d2433; --mut:#6b7385; --ok:#1f9d6b; --bad:#d64545; --acc:#3b6fe0; }
+  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:16px 24px; background:var(--txt); color:#fff; }
+  header h1 { margin:0; font-size:20px; } header p { margin:4px 0 0; color:#c5cada; font-size:14px; }
+  main { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; padding:16px; }
+  section { background:var(--card); border-radius:10px; padding:16px; box-shadow:0 1px 3px #0002; }
+  h2 { margin:0 0 12px; font-size:16px; }
+  .frames { display:flex; gap:8px; flex-wrap:wrap; }
+  .m { width:84px; padding:10px 6px; text-align:center; border-radius:8px; border:2px solid #d5d9e4; }
+  .m small { display:block; color:var(--mut); } .m b { font-size:16px; }
+  .m.ocup { background:#e8f0ff; border-color:var(--acc); } .m.libre { background:#f0f1f5; color:var(--mut); }
+  .m.act { box-shadow:0 0 0 3px #f5b942; }
+  .bar { height:18px; background:#e4e7ef; border-radius:9px; overflow:hidden; margin:6px 0 12px; }
+  .bar div { height:100%; background:var(--ok); }
+  .chips span { display:inline-block; margin:2px 4px 2px 0; padding:3px 8px; background:#eef1f7; border-radius:12px; font-size:13px; }
+  .big { font-size:28px; font-weight:700; } .mut { color:var(--mut); font-size:13px; }
+  #estado { font-size:14px; } .fallo { color:var(--bad); font-weight:600; } .hit { color:var(--ok); font-weight:600; }
+  svg text { font-size:11px; fill:var(--mut); } .wide { grid-column:1/-1; }
+  .leyenda span { margin-right:14px; font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Virtual MMU Page Replace Explorer</h1>
+  <p id="estado">Esperando estado.json... ejecuta el simulador en modo <b>vivo</b>.</p>
+</header>
+<main>
+  <section>
+    <h2>Mapa de marcos físicos (RAM)</h2>
+    <div id="marcos" class="frames"></div>
+    <p class="mut">Azul = asignado · Gris = libre · Borde dorado = último marco usado</p>
+    <p id="ultimo"></p>
+  </section>
+  <section>
+    <h2>Panel del TLB</h2>
+    <div class="big" id="tlbPct">--</div>
+    <div class="mut" id="tlbTxt">aciertos del TLB</div>
+    <div class="bar"><div id="tlbBar" style="width:0%"></div></div>
+    <div>Page Faults: <b id="faults">0</b> de <b id="accesos">0</b> accesos</div>
+    <p class="mut">Entradas del TLB:</p>
+    <div id="tlbEntradas" class="chips"></div>
+  </section>
+  <section class="wide">
+    <h2>Page Faults vs. marcos asignados</h2>
+    <div id="leyenda" class="leyenda"></div>
+    <svg id="grafica" viewBox="0 0 640 280" width="100%"></svg>
+    <p class="mut" id="belady">Ejecuta: ./simulador pruebas/secuencia.txt 3 belady</p>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const COLORES = { fifo:'#d64545', lru:'#3b6fe0', reloj:'#e8a21a', optimo:'#1f9d6b' };
+
+async function leer(url) {
+  const r = await fetch(url + '?t=' + Date.now(), { cache: 'no-store' });
+  if (!r.ok) throw new Error(url);
+  return r.json();
+}
+
+function pintarEstado(e) {
+  const h = e.historial[e.historial.length - 1];
+  $('estado').innerHTML = `Algoritmo <b>${e.algoritmo.toUpperCase()}</b> · ${e.marcos} marcos · paso ${e.paso}/${e.total}` +
+    (e.terminado ? ' · <b>terminado</b>' : ' · en ejecución...');
+  $('marcos').innerHTML = e.marcosEstado.map((p, i) =>
+    `<div class="m ${p < 0 ? 'libre' : 'ocup'}${h && h.marco === i ? ' act' : ''}"><small>Marco ${i}</small><b>${p < 0 ? 'libre' : 'Pág ' + p}</b></div>`).join('');
+  if (h) $('ultimo').innerHTML = `Dir lógica ${h.dirLogica} → pág ${h.pagina}: ` +
+    (h.fallo ? `<span class="fallo">PAGE FAULT</span>` + (h.victima >= 0 ? ` (sale pág ${h.victima})` : '') : `<span class="hit">en RAM</span>`) +
+    ` · dir física ${h.dirFisica}`;
+  const m = e.metricas, pct = m.accesos ? Math.round(100 * m.tlbHits / m.accesos) : 0;
+  $('tlbPct').textContent = pct + '%';
+  $('tlbTxt').textContent = `${m.tlbHits} hits · ${m.tlbMisses} misses`;
+  $('tlbBar').style.width = pct + '%';
+  $('faults').textContent = m.pageFaults; $('accesos').textContent = m.accesos;
+  $('tlbEntradas').innerHTML = e.tlbEstado.map(t => `<span>pág ${t.pagina} → marco ${t.marco}</span>`).join('') || '<span>vacío</span>';
+}
+
+function pintarGrafica(d) {
+  const W = 640, H = 280, L = 40, R = 16, T = 12, B = 32;
+  const max = Math.max(...Object.values(d.series).flat());
+  const x = i => L + i * (W - L - R) / (d.marcos.length - 1);
+  const y = v => H - B - v * (H - B - T) / max;
+  let s = '';
+  for (let v = 0; v <= max; v += Math.ceil(max / 6)) s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e4e7ef"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+  d.marcos.forEach((n, i) => s += `<text x="${x(i)}" y="${H - 14}" text-anchor="middle">${n}</text>`);
+  s += `<text x="${W / 2}" y="${H - 1}" text-anchor="middle">Marcos asignados</text>`;
+  let anomalia = false;
+  for (const [alg, vals] of Object.entries(d.series)) {
+    s += `<polyline fill="none" stroke="${COLORES[alg] || '#555'}" stroke-width="2.5" points="${vals.map((v, i) => x(i) + ',' + y(v)).join(' ')}"/>`;
+    vals.forEach((v, i) => {
+      const sube = i > 0 && v > vals[i - 1];
+      if (alg === 'fifo' && sube) anomalia = true;
+      s += `<circle cx="${x(i)}" cy="${y(v)}" r="${sube ? 6 : 3}" fill="${sube ? 'none' : COLORES[alg]}" stroke="${COLORES[alg]}" stroke-width="2"/>`;
+    });
+  }
+  $('grafica').innerHTML = s;
+  $('leyenda').innerHTML = Object.keys(d.series).map(a => `<span style="color:${COLORES[a]}">● ${a}</span>`).join('');
+  $('belady').innerHTML = anomalia ? '<b>Anomalía de Belady detectada en FIFO:</b> los círculos huecos marcan donde, al subir los marcos, los fallos también subieron.' : 'Sin anomalía de Belady en estos datos.';
+}
+
+async function ciclo() {
+  try { pintarEstado(await leer('estado.json')); } catch (_) {}
+}
+async function cargarBelady() {
+  try { pintarGrafica(await leer('belady.json')); } catch (_) { setTimeout(cargarBelady, 3000); }
+}
+ciclo(); setInterval(ciclo, 500); cargarBelady();
+</script>
+</body>
+</html>
