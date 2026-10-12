@@ -92,11 +92,11 @@ function pintarGrafica(d) {
   s += `<text x="${W / 2}" y="${H - 1}" text-anchor="middle">Marcos asignados</text>`;
   let anomalia = false;
   for (const [alg, vals] of Object.entries(d.series)) {
-    s += `<polyline fill="none" stroke="${COLORES[alg] || '#555'}" stroke-width="2.5" points="${vals.map((v, i) => x(i) + ',' + y(v)).join(' ')}"/>`;
+    s += `<polyline fill="none" stroke="${COLORES[alg] || '#555'}" stroke-width="${alg === 'fifo' ? 7 : 2.5}" points="${vals.map((v, i) => x(i) + ',' + y(v)).join(' ')}"/>`;
     vals.forEach((v, i) => {
       const sube = i > 0 && v > vals[i - 1];
       if (alg === 'fifo' && sube) anomalia = true;
-      s += `<circle cx="${x(i)}" cy="${y(v)}" r="${sube ? 6 : 3}" fill="${sube ? 'none' : COLORES[alg]}" stroke="${COLORES[alg]}" stroke-width="2"/>`;
+      s += `<circle cx="${x(i)}" cy="${y(v)}"r="${sube ? (alg === 'fifo' ? 10 : 6) : 3}" fill="${sube ? 'none' : COLORES[alg]}" stroke="${COLORES[alg]}" stroke-width="2"/>`;
     });
   }
   $('grafica').innerHTML = s;

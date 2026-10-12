@@ -140,4 +140,4 @@ Resultado esperado: `All heap blocks were freed -- no leaks are possible` y `ERR
 
 ## Autoría
 
-Daniela Blandon Garcia
+Daniela Blandon Garcia — [agregar los demás integrantes del equipo].
