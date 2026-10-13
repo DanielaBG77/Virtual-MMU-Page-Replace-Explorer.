@@ -9,6 +9,14 @@
   body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--txt); }
   header { padding:16px 24px; background:var(--txt); color:#fff; }
   header h1 { margin:0; font-size:20px; } header p { margin:4px 0 0; color:#c5cada; font-size:14px; }
+  .controles { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; padding:14px 16px; background:var(--card); margin:16px 16px 0; border-radius:10px; box-shadow:0 1px 3px #0002; }
+  .controles label { display:flex; flex-direction:column; font-size:12px; color:var(--mut); gap:4px; }
+  .controles select, .controles input { padding:7px 8px; border:1px solid #cfd4e2; border-radius:6px; font-size:14px; background:#fff; color:var(--txt); }
+  .controles input { width:80px; }
+  button { padding:9px 16px; border:0; border-radius:6px; background:var(--acc); color:#fff; font-size:14px; font-weight:600; cursor:pointer; }
+  button.sec { background:#e8ecf5; color:var(--txt); }
+  button:disabled { opacity:.5; cursor:wait; }
+  #aviso { font-size:13px; color:var(--bad); min-height:18px; padding:6px 20px 0; }
   main { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; padding:16px; }
   section { background:var(--card); border-radius:10px; padding:16px; box-shadow:0 1px 3px #0002; }
   h2 { margin:0 0 12px; font-size:16px; }
@@ -24,34 +32,60 @@
   #estado { font-size:14px; } .fallo { color:var(--bad); font-weight:600; } .hit { color:var(--ok); font-weight:600; }
   svg text { font-size:11px; fill:var(--mut); } .wide { grid-column:1/-1; }
   .leyenda span { margin-right:14px; font-size:13px; }
+  .blq { margin-bottom:10px; } .blq .nom { font-size:13px; font-weight:700; margin-bottom:4px; }
+  table.tlb { width:100%; border-collapse:collapse; font-size:13px; } table.tlb th, table.tlb td { text-align:left; padding:6px 8px; border-bottom:1px solid #e4e7ef; } table.tlb th { color:var(--mut); font-weight:600; }
 </style>
 </head>
 <body>
 <header>
   <h1>Virtual MMU Page Replace Explorer</h1>
-  <p id="estado">Esperando estado.json... ejecuta el simulador en modo <b>vivo</b>.</p>
+  <p id="estado">Elige un algoritmo y presiona <b>Ejecutar</b>.</p>
 </header>
+
+<div class="controles">
+  <label>Secuencia <select id="seq"></select></label>
+  <label>Algoritmo
+    <select id="alg">
+      <option value="todos">Todos (comparar los 4)</option>
+      <option value="fifo">FIFO</option><option value="lru" selected>LRU</option>
+      <option value="reloj">Reloj</option><option value="optimo">Óptimo</option>
+    </select>
+  </label>
+  <label>Marcos <input id="marcos" type="number" min="1" max="10" value="3"></label>
+  <label>Pausa por paso (ms) <input id="ms" type="number" min="0" max="3000" step="100" value="700"></label>
+  <button id="btnVivo">▶ Ejecutar</button>
+</div>
+<div id="aviso"></div>
+
 <main>
   <section>
     <h2>Mapa de marcos físicos (RAM)</h2>
-    <div id="marcos" class="frames"></div>
+    <div id="marcosMapa"></div>
     <p class="mut">Azul = asignado · Gris = libre · Borde dorado = último marco usado</p>
     <p id="ultimo"></p>
   </section>
   <section>
     <h2>Panel del TLB</h2>
+    <div id="tlbSingle">
     <div class="big" id="tlbPct">--</div>
     <div class="mut" id="tlbTxt">aciertos del TLB</div>
     <div class="bar"><div id="tlbBar" style="width:0%"></div></div>
     <div>Page Faults: <b id="faults">0</b> de <b id="accesos">0</b> accesos</div>
     <p class="mut">Entradas del TLB:</p>
     <div id="tlbEntradas" class="chips"></div>
+    </div>
+    <div id="tlbMulti"></div>
+  </section>
+  <section class="wide">
+    <h2>Avance en vivo: fallos acumulados por paso</h2>
+    <div class="leyenda" id="vivoLeyenda"></div>
+    <svg id="vivoGraf" viewBox="0 0 640 220" width="100%"></svg>
   </section>
   <section class="wide">
     <h2>Page Faults vs. marcos asignados</h2>
     <div id="leyenda" class="leyenda"></div>
     <svg id="grafica" viewBox="0 0 640 280" width="100%"></svg>
-    <p class="mut" id="belady">Ejecuta: ./simulador pruebas/secuencia.txt 3 belady</p>
+    <p class="mut" id="belady">Al presionar Ejecutar, un marcador por algoritmo sube con los fallos acumulados. Con un solo algoritmo, su línea se resalta.</p>
   </section>
 </main>
 <script>
@@ -59,58 +93,165 @@ const $ = id => document.getElementById(id);
 const COLORES = { fifo:'#d64545', lru:'#3b6fe0', reloj:'#e8a21a', optimo:'#1f9d6b' };
 
 async function leer(url) {
-  const r = await fetch(url + '?t=' + Date.now(), { cache: 'no-store' });
+  const r = await fetch(url + (url.includes('?') ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' });
   if (!r.ok) throw new Error(url);
   return r.json();
 }
+async function accion(url) {
+  const r = await fetch(url, { method: 'POST' });
+  return r.json();
+}
+function aviso(t) { $('aviso').textContent = t || ''; }
 
-function pintarEstado(e) {
+const ALGS = ['fifo', 'lru', 'reloj', 'optimo'];
+const NOMBRES = { fifo:'FIFO', lru:'LRU', reloj:'Reloj', optimo:'Óptimo' };
+let datosBelady = null, ultimosEstados = null, puntos = {};
+
+function marcosHtml(e) {
   const h = e.historial[e.historial.length - 1];
-  $('estado').innerHTML = `Algoritmo <b>${e.algoritmo.toUpperCase()}</b> · ${e.marcos} marcos · paso ${e.paso}/${e.total}` +
-    (e.terminado ? ' · <b>terminado</b>' : ' · en ejecución...');
-  $('marcos').innerHTML = e.marcosEstado.map((p, i) =>
-    `<div class="m ${p < 0 ? 'libre' : 'ocup'}${h && h.marco === i ? ' act' : ''}"><small>Marco ${i}</small><b>${p < 0 ? 'libre' : 'Pág ' + p}</b></div>`).join('');
-  if (h) $('ultimo').innerHTML = `Dir lógica ${h.dirLogica} → pág ${h.pagina}: ` +
+  return '<div class="frames">' + e.marcosEstado.map((p, i) =>
+    `<div class="m ${p < 0 ? 'libre' : 'ocup'}${h && h.marco === i ? ' act' : ''}"><small>Marco ${i}</small><b>${p < 0 ? 'libre' : 'Pág ' + p}</b></div>`).join('') + '</div>';
+}
+function ultimoHtml(e, multi) {
+  const h = e.historial[e.historial.length - 1];
+  if (!h) return '';
+  const pre = multi ? `<b style="color:${COLORES[e.algoritmo]}">${NOMBRES[e.algoritmo]}</b>: ` : '';
+  return pre + `dir lógica ${h.dirLogica} → pág ${h.pagina}: ` +
     (h.fallo ? `<span class="fallo">PAGE FAULT</span>` + (h.victima >= 0 ? ` (sale pág ${h.victima})` : '') : `<span class="hit">en RAM</span>`) +
     ` · dir física ${h.dirFisica}`;
-  const m = e.metricas, pct = m.accesos ? Math.round(100 * m.tlbHits / m.accesos) : 0;
-  $('tlbPct').textContent = pct + '%';
-  $('tlbTxt').textContent = `${m.tlbHits} hits · ${m.tlbMisses} misses`;
-  $('tlbBar').style.width = pct + '%';
-  $('faults').textContent = m.pageFaults; $('accesos').textContent = m.accesos;
-  $('tlbEntradas').innerHTML = e.tlbEstado.map(t => `<span>pág ${t.pagina} → marco ${t.marco}</span>`).join('') || '<span>vacío</span>';
 }
 
-function pintarGrafica(d) {
+function pintarEstados(es) {
+  const multi = es.length > 1, e0 = es[0];
+  const paso = Math.min(...es.map(e => e.paso)), fin = es.every(e => e.terminado);
+  $('estado').innerHTML = (multi ? `Comparando <b>los ${es.length} algoritmos</b>` : `Algoritmo <b>${NOMBRES[e0.algoritmo]}</b>`) +
+    ` · ${e0.marcos} marcos · paso ${paso}/${e0.total}` + (fin ? ' · <b>terminado</b>' : ' · en ejecución...');
+  $('marcosMapa').innerHTML = es.map(e => `<div class="blq">` +
+    (multi ? `<div class="nom" style="color:${COLORES[e.algoritmo]}">${NOMBRES[e.algoritmo]}</div>` : '') + marcosHtml(e) + `</div>`).join('');
+  $('ultimo').innerHTML = es.map(e => ultimoHtml(e, multi)).join('<br>');
+  $('tlbSingle').style.display = multi ? 'none' : '';
+  if (multi) {
+    $('tlbMulti').innerHTML = '<table class="tlb"><tr><th>Algoritmo</th><th>TLB hits</th><th>Misses</th><th>% aciertos</th><th>Page Faults</th></tr>' +
+      es.map(e => { const m = e.metricas, pct = m.accesos ? Math.round(100 * m.tlbHits / m.accesos) : 0;
+        return `<tr><td><b style="color:${COLORES[e.algoritmo]}">${NOMBRES[e.algoritmo]}</b></td><td>${m.tlbHits}</td><td>${m.tlbMisses}</td><td>${pct}%</td><td><b>${m.pageFaults}</b> / ${m.accesos}</td></tr>`; }).join('') + '</table>';
+  } else {
+    $('tlbMulti').innerHTML = '';
+    const m = e0.metricas, pct = m.accesos ? Math.round(100 * m.tlbHits / m.accesos) : 0;
+    $('tlbPct').textContent = pct + '%';
+    $('tlbTxt').textContent = `${m.tlbHits} hits · ${m.tlbMisses} misses`;
+    $('tlbBar').style.width = pct + '%';
+    $('faults').textContent = m.pageFaults; $('accesos').textContent = m.accesos;
+    $('tlbEntradas').innerHTML = e0.tlbEstado.map(t => `<span>pág ${t.pagina} → marco ${t.marco}</span>`).join('') || '<span>vacío</span>';
+  }
+}
+
+function pintarGrafica(d, es) {
   const W = 640, H = 280, L = 40, R = 16, T = 12, B = 32;
   const max = Math.max(...Object.values(d.series).flat());
   const x = i => L + i * (W - L - R) / (d.marcos.length - 1);
   const y = v => H - B - v * (H - B - T) / max;
+  const unico = es && es.length === 1 ? es[0].algoritmo : null;
   let s = '';
   for (let v = 0; v <= max; v += Math.ceil(max / 6)) s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e4e7ef"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
   d.marcos.forEach((n, i) => s += `<text x="${x(i)}" y="${H - 14}" text-anchor="middle">${n}</text>`);
   s += `<text x="${W / 2}" y="${H - 1}" text-anchor="middle">Marcos asignados</text>`;
   let anomalia = false;
   for (const [alg, vals] of Object.entries(d.series)) {
-    s += `<polyline fill="none" stroke="${COLORES[alg] || '#555'}" stroke-width="${alg === 'fifo' ? 7 : 2.5}" points="${vals.map((v, i) => x(i) + ',' + y(v)).join(' ')}"/>`;
+    const op = unico && unico !== alg ? 0.25 : 1;
+    s += `<g opacity="${op}"><polyline fill="none" stroke="${COLORES[alg] || '#555'}" stroke-width="${alg === 'fifo' ? 7 : 2.5}" points="${vals.map((v, i) => x(i) + ',' + y(v)).join(' ')}"/>`;
     vals.forEach((v, i) => {
       const sube = i > 0 && v > vals[i - 1];
       if (alg === 'fifo' && sube) anomalia = true;
-      s += `<circle cx="${x(i)}" cy="${y(v)}"r="${sube ? (alg === 'fifo' ? 10 : 6) : 3}" fill="${sube ? 'none' : COLORES[alg]}" stroke="${COLORES[alg]}" stroke-width="2"/>`;
+      s += `<circle cx="${x(i)}" cy="${y(v)}" r="${sube ? (alg === 'fifo' ? 10 : 6) : 3}" fill="${sube ? 'none' : COLORES[alg]}" stroke="${COLORES[alg]}" stroke-width="2"/>`;
     });
+    s += '</g>';
+  }
+  if (es && es.length) {  // marcadores en vivo: suben a medida que cada algoritmo acumula fallos
+    const i = d.marcos.indexOf(es[0].marcos);
+    if (i >= 0) {
+      s += `<line x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}" stroke="#888" stroke-dasharray="4 4" opacity=".6"/>`;
+      es.forEach((e, k) => {
+        const c = COLORES[e.algoritmo] || '#555', f = e.metricas.pageFaults;
+        const r = es.length > 1 ? 7 + (es.length - 1 - k) * 3 : 8;
+        s += `<circle cx="${x(i)}" cy="${y(f)}" r="${r}" fill="#fff" fill-opacity=".4" stroke="${c}" stroke-width="3"/>`;
+        const ty = es.length > 1 ? T + 14 + k * 16 : y(f) + 4;
+        s += `<text x="${x(i) + 16}" y="${ty}" style="font-size:13px;font-weight:700;fill:${c}">${NOMBRES[e.algoritmo]}: ${f}</text>`;
+      });
+    }
   }
   $('grafica').innerHTML = s;
-  $('leyenda').innerHTML = Object.keys(d.series).map(a => `<span style="color:${COLORES[a]}">● ${a}</span>`).join('');
+  $('leyenda').innerHTML = Object.keys(d.series).map(a => `<span style="color:${COLORES[a]}">● ${NOMBRES[a] || a}</span>`).join('');
   $('belady').innerHTML = anomalia ? '<b>Anomalía de Belady detectada en FIFO:</b> los círculos huecos marcan donde, al subir los marcos, los fallos también subieron.' : 'Sin anomalía de Belady en estos datos.';
 }
 
+function pintarVivo(es) {
+  const multi = es.length > 1;
+  for (const e of es) {
+    const p = puntos[e.algoritmo] || (puntos[e.algoritmo] = {});
+    if (e.paso < Math.max(0, ...Object.keys(p).map(Number))) for (const k of Object.keys(p)) delete p[k];
+    p[e.paso] = { f: e.metricas.pageFaults, h: e.metricas.tlbHits };
+  }
+  const W = 640, H = 220, L = 40, R = 16, T = 12, B = 30, N = Math.max(es[0].total, 2);
+  const x = i => L + (i - 1) * (W - L - R) / (N - 1);
+  const y = v => H - B - v * (H - B - T) / N;
+  let s = '';
+  for (let v = 0; v <= N; v += Math.ceil(N / 6)) s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e4e7ef"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+  for (let i = 1; i <= N; i++) s += `<text x="${x(i)}" y="${H - 12}" text-anchor="middle">${i}</text>`;
+  s += `<text x="${W / 2}" y="${H - 1}" text-anchor="middle">Paso de la simulación</text>`;
+  const series = [];
+  if (multi) es.forEach(e => series.push({ nombre: NOMBRES[e.algoritmo] + ' (fallos)', color: COLORES[e.algoritmo], datos: puntos[e.algoritmo], k: 'f', ancho: e.algoritmo === 'fifo' ? 6 : 2.5 }));
+  else {
+    series.push({ nombre: 'Page Faults', color: '#d64545', datos: puntos[es[0].algoritmo], k: 'f', ancho: 2.5 });
+    series.push({ nombre: 'TLB hits', color: '#1f9d6b', datos: puntos[es[0].algoritmo], k: 'h', ancho: 2.5 });
+  }
+  for (const sr of series) {
+    const pasos = Object.keys(sr.datos).map(Number).sort((a, b) => a - b);
+    s += `<polyline fill="none" stroke="${sr.color}" stroke-width="${sr.ancho}" points="${pasos.map(i => x(i) + ',' + y(sr.datos[i][sr.k])).join(' ')}"/>`;
+    pasos.forEach(i => s += `<circle cx="${x(i)}" cy="${y(sr.datos[i][sr.k])}" r="3.5" fill="${sr.color}"/>`);
+  }
+  $('vivoGraf').innerHTML = s;
+  $('vivoLeyenda').innerHTML = series.map(sr => `<span style="color:${sr.color}">● ${sr.nombre}</span>`).join('');
+}
+
+async function cargarGrafica() {
+  try { datosBelady = await leer('belady.json'); pintarGrafica(datosBelady, ultimosEstados); } catch (_) {}
+}
+async function cargarSecuencias() {
+  try {
+    const d = await leer('/api/secuencias');
+    $('seq').innerHTML = d.secuencias.map(s => `<option>${s}</option>`).join('');
+  } catch (_) {
+    aviso('Los botones necesitan el servidor del proyecto: ejecuta  python3 servidor.py  (no python3 -m http.server).');
+  }
+}
+async function conBoton(btn, fn) {
+  btn.disabled = true; aviso('');
+  try { await fn(); } catch (_) { aviso('No se pudo contactar el servidor. ¿Está encendido  python3 servidor.py ?'); }
+  btn.disabled = false;
+}
+
+$('btnVivo').onclick = () => conBoton($('btnVivo'), async () => {
+  const seq = encodeURIComponent($('seq').value);
+  const g = await accion('/api/belady?seq=' + seq);          // 1) recalcula la comparacion de los 4 algoritmos
+  if (!g.ok) { aviso(g.error || 'No se pudo generar la gráfica.'); return; }
+  await cargarGrafica();
+  puntos = {}; ultimosEstados = null; $('vivoGraf').innerHTML = '';   // 2) reinicia las graficas en vivo
+  if (datosBelady) pintarGrafica(datosBelady, null);
+  const q = new URLSearchParams({ seq: $('seq').value, alg: $('alg').value, marcos: $('marcos').value, ms: $('ms').value });
+  const r = await accion('/api/vivo?' + q);                   // 3) lanza la simulacion (uno o los cuatro)
+  if (!r.ok) aviso(r.error || 'No se pudo iniciar la simulación.');
+});
+
 async function ciclo() {
-  try { pintarEstado(await leer('estado.json')); } catch (_) {}
+  try {
+    const r = await leer('/api/estados');
+    const es = ALGS.filter(a => r.estados && r.estados[a]).map(a => r.estados[a]);
+    if (!es.length) return;
+    pintarEstados(es); pintarVivo(es); ultimosEstados = es;
+    if (datosBelady) pintarGrafica(datosBelady, es);
+  } catch (_) {}
 }
-async function cargarBelady() {
-  try { pintarGrafica(await leer('belady.json')); } catch (_) { setTimeout(cargarBelady, 3000); }
-}
-ciclo(); setInterval(ciclo, 500); cargarBelady();
+cargarSecuencias(); cargarGrafica(); ciclo(); setInterval(ciclo, 500);
 </script>
 </body>
 </html>
