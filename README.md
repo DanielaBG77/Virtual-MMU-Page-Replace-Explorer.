@@ -20,7 +20,7 @@ Proyecto de la asignatura Sistemas Operativos — Tecnología en Gestión de Sis
 |---|---|
 | Sistema operativo | **Linux** (probado en Ubuntu). `/proc/PID/pagemap` no existe en Windows ni macOS |
 | Compilador | `g++` con C++17 (`build-essential`) |
-| Python 3 | Solo para el servidor local del dashboard |
+| Python 3 | Solo para `servidor.py` (servidor local del dashboard) |
 | Navegador | Firefox, Chrome o similar |
 | Git | Para clonar el proyecto |
 | Valgrind | Opcional, para repetir las pruebas de memoria |
@@ -71,14 +71,15 @@ Con FIFO, pasar de 3 a 4 marcos **aumenta** los fallos de 9 a 10: es la Anomalí
 
 ## Dashboard
 
-Se necesitan **dos terminales**.
+Basta **una terminal**:
 
-1. **Terminal 1:** `./simulador pruebas/secuencia.txt 3 belady`
-2. **Terminal 2:** `cd dashboard && python3 -m http.server 8000` (dejarla abierta)
-3. **Navegador:** abrir `http://localhost:8000`
-4. **Terminal 1:** `./simulador pruebas/secuencia.txt 3 vivo lru 700`
+1. En la raíz del proyecto (ya compilado): `python3 servidor.py` (dejarla abierta)
+2. Abrir en el navegador `http://localhost:8000`
+3. Elegir secuencia, marcos, algoritmo y pausa, y pulsar **▶ Ejecutar**
 
-Para apagar el servidor: `Ctrl + C` en la Terminal 2.
+El selector de algoritmo permite correr uno solo (FIFO, LRU, Reloj, Óptimo) o **Todos (comparar los 4)**, que ejecuta los cuatro a la vez y los muestra juntos en el mapa de marcos, la tabla del TLB y las gráficas.
+
+Para apagar el servidor: `Ctrl + C` (también detiene las simulaciones en curso). Los datos de cada corrida se guardan en `.vivo/`, que está en `.gitignore`.
 
 ## Secuencia propia
 
@@ -105,6 +106,7 @@ virtual-mmu-page-replace-explorer/
 ├── dashboard/
 │   ├── index.html
 │   └── belady.json
+├── servidor.py             # servidor local del dashboard
 └── README.md
 ```
 
@@ -127,8 +129,10 @@ Resultado esperado: `All heap blocks were freed -- no leaks are possible` y `ERR
 | `Error: la secuencia esta vacia` | El `.txt` está vacío o sin guardar |
 | `Error: no se pudo abrir ...` | Ejecutar desde la raíz del proyecto |
 | Marco físico `(oculto: requiere sudo)` | Normal sin permisos; ejecutar con `sudo` |
-| Dashboard en "Esperando estado.json..." | Ejecutar el modo `vivo` y servir desde la carpeta `dashboard` |
-| Gráfica vacía | Ejecutar primero el modo `belady` |
+| Dashboard en "Esperando estado.json..." | Pulsar **▶ Ejecutar** y verificar que `python3 servidor.py` corre desde la raíz |
+| Gráfica vacía | Pulsar **▶ Ejecutar** (genera `belady.json`) |
+| Falta la opción «Todos» / dos botones | `index.html` antiguo: reemplazarlo y `Ctrl + Shift + R` |
+| `Address already in use` | Otro servidor usa el puerto 8000: `python3 servidor.py 8001` |
 | Cambios en la página no se ven | Recargar con `Ctrl + Shift + R` |
 
 ## Limitaciones
