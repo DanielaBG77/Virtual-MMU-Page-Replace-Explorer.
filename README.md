@@ -4,6 +4,21 @@ Simulador de memoria virtual en **C++**: traduce direcciones lógicas a físicas
 
 Proyecto de la asignatura Sistemas Operativos — Tecnología en Gestión de Sistemas Informáticos, UNINTEP.
 
+## Contenido
+
+1. [Características](#características)
+2. [Requisitos](#requisitos)
+3. [Instalación](#instalación)
+4. [Compilar](#compilar)
+5. [Uso](#uso)
+6. [Dashboard](#dashboard)
+7. [Arquitectura y diagramas](#arquitectura-y-diagramas)
+8. [Estructura del proyecto](#estructura-del-proyecto)
+9. [Pruebas de memoria](#pruebas-de-memoria)
+10. [Problemas frecuentes](#problemas-frecuentes)
+11. [Limitaciones y mejoras futuras](#limitaciones-y-mejoras-futuras)
+12. [Equipo](#equipo)
+
 ## Características
 
 - **MMU simulada:** separa página y desplazamiento, consulta el TLB, luego la tabla de páginas y, si la RAM está llena, dispara el algoritmo de reemplazo.
@@ -11,7 +26,7 @@ Proyecto de la asignatura Sistemas Operativos — Tecnología en Gestión de Sis
 - **Métricas:** page faults, hits y misses del TLB.
 - **Anomalía de Belady:** tabla de fallos con 1 a 7 marcos.
 - **Interacción con el kernel:** lectura de `/proc/self/pagemap` con `open`, `pread` y `mmap`, con manejo de errores y sin fugas de memoria.
-- **Concurrencia:** modelo productor-consumidor con `std::thread`, `std::mutex` y variables de condición.
+- **Concurrencia:** modelo productor-consumidor con `std::thread` (hilos POSIX en Linux), `std::mutex` y variables de condición.
 - **Dashboard:** mapa de marcos, panel del TLB y gráfica de fallos contra marcos.
 
 ## Requisitos
@@ -33,7 +48,7 @@ Proyecto de la asignatura Sistemas Operativos — Tecnología en Gestión de Sis
 sudo apt update
 sudo apt install build-essential git python3 valgrind
 
-git clone <URL-del-repositorio>
+git clone https://github.com/DanielaBG77/virtual-mmu-page-replace-explorer.git
 cd virtual-mmu-page-replace-explorer
 ```
 
@@ -67,7 +82,15 @@ La opción `-pthread` es obligatoria porque el proyecto usa hilos.
 | 3 | 9 | 10 | 9 | 7 |
 | 4 | 10 | 8 | 10 | 6 |
 
-Con FIFO, pasar de 3 a 4 marcos **aumenta** los fallos de 9 a 10: es la Anomalía de Belady.
+Con FIFO, pasar de 3 a 4 marcos **aumenta** los fallos de 9 a 10: es la **Anomalía de Belady**. Con esta secuencia, Reloj también la muestra (9 a 10), mientras que LRU y Óptimo bajan sus fallos al agregar memoria.
+
+### Secuencia propia
+
+El archivo de entrada es un `.txt` con números de página separados por espacios:
+
+```
+1 2 3 4 1 2 5 1 2 3 4 5
+```
 
 ## Dashboard
 
@@ -81,12 +104,61 @@ El selector de algoritmo permite correr uno solo (FIFO, LRU, Reloj, Óptimo) o *
 
 Para apagar el servidor: `Ctrl + C` (también detiene las simulaciones en curso). Los datos de cada corrida se guardan en `.vivo/`, que está en `.gitignore`.
 
-## Secuencia propia
+## Arquitectura y diagramas
 
-El archivo de entrada es un `.txt` con números de página separados por espacios:
+### Flujo de un acceso a memoria (MMU)
 
+```mermaid
+flowchart TD
+    A[Dirección lógica] --> B[Separar número de página y desplazamiento]
+    B --> C{¿Página en el TLB?}
+    C -- "Sí: TLB hit" --> H[Dirección física = marco + desplazamiento]
+    C -- "No: TLB miss" --> D{¿Página en la tabla de páginas?}
+    D -- Sí --> E[Registrar la traducción en el TLB]
+    D -- "No: page fault" --> F{¿Hay un marco libre?}
+    F -- Sí --> G[Cargar la página en el marco libre]
+    F -- No --> V[El algoritmo de reemplazo elige la víctima]
+    V --> W[Invalidar la víctima en el TLB y la tabla de páginas]
+    W --> G
+    G --> E
+    E --> H
 ```
-1 2 3 4 1 2 5 1 2 3 4 5
+
+### Ciclo de vida de una página
+
+```mermaid
+stateDiagram-v2
+    [*] --> NoCargada
+    NoCargada --> EnRAM: page fault, se carga en un marco
+    EnRAM --> EnRAMyTLB: se registra en el TLB
+    EnRAMyTLB --> EnRAM: sale del TLB, entra otra traducción
+    EnRAM --> NoCargada: elegida como víctima
+    EnRAMyTLB --> NoCargada: elegida como víctima
+```
+
+### Modo en vivo: productor-consumidor
+
+```mermaid
+flowchart LR
+    P["Hilo productor<br/>dueño de la MMU"] -->|"push(foto)"| C[("Cola acotada<br/>8 fotos<br/>mutex + 2 variables de condición")]
+    C -->|"pop(foto)"| K["Hilo consumidor<br/>escribe estado.json"]
+    K --> J[dashboard/estado.json]
+    J --> D["Dashboard web<br/>lee el JSON"]
+```
+
+El productor espera si la cola está llena (`noLlena`) y el consumidor espera si está vacía (`noVacia`), sin consumir CPU. El `mutex` garantiza que solo un hilo modifique la cola a la vez, lo que evita condiciones de carrera. El JSON se escribe de forma atómica para que el dashboard nunca lea un archivo a medias.
+
+### Módulos del código
+
+```mermaid
+flowchart TD
+    M[main.cpp<br/>modos y argumentos] --> U[mmu.h<br/>TLB, tabla de páginas, marcos]
+    M --> V[vivo.h<br/>modo en vivo, 2 hilos]
+    M --> R[pagemap_reader.h<br/>/proc/self/pagemap]
+    U --> PO[politicas.h<br/>FIFO, LRU, Reloj, Óptimo]
+    V --> Q[cola.h<br/>buffer productor-consumidor]
+    V --> E[estado.h<br/>fotos del estado y JSON]
+    V --> U
 ```
 
 ## Estructura del proyecto
@@ -134,14 +206,22 @@ Resultado esperado: `All heap blocks were freed -- no leaks are possible` y `ERR
 | Falta la opción «Todos» / dos botones | `index.html` antiguo: reemplazarlo y `Ctrl + Shift + R` |
 | `Address already in use` | Otro servidor usa el puerto 8000: `python3 servidor.py 8001` |
 | Cambios en la página no se ven | Recargar con `Ctrl + Shift + R` |
+| `Permission denied` al ejecutar `./simulador` | `chmod +x simulador` o volver a compilar |
 
-## Limitaciones
+## Limitaciones y mejoras futuras
+
+**Limitaciones**
 
 - Modela un solo proceso con una única tabla de páginas.
 - El desplazamiento de las direcciones lógicas es sintético cuando la entrada es un archivo de páginas.
 - El Swap es conceptual: no se simulan bits de modificación ni escrituras a disco.
 - La lectura de `pagemap` es demostrativa y no alimenta la simulación.
 
-## Autoría
+**Mejoras futuras**
 
-Daniela Blandon Garcia — Alex Raul Capote.
+- **Gráfica "Page Faults vs. marcos asignados":** hoy, en cada ejecución, la gráfica anterior solo se opaca y los marcadores la recorren encima. La mejora prevista es borrarla por completo y redibujarla desde cero en cada **Ejecutar**, para que no se mezclen los datos de una corrida con los de la anterior.
+
+## Equipo
+
+- Daniela Blandón García
+- Alex Raúl Japote
