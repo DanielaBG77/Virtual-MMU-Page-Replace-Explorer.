@@ -187,4 +187,4 @@ Resultado esperado: `All heap blocks were freed -- no leaks are possible` y `ERR
 
 ## Autoría
 
-Daniela Blandon Garcia — Alex Raul Capote.
+Daniela Blandon Garcia .
