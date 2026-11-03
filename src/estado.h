@@ -1,12 +1,14 @@
 #pragma once
 #include <deque>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 #include "mmu.h"
+#include "thrashing.h"
 
 // Foto del simulador justo después de procesar UNA petición. Es una COPIA:
 // el consumidor nunca toca la MMU, solo recibe fotos (así se evitan condiciones de carrera).
@@ -19,7 +21,22 @@ struct Instantanea {
     std::vector<int> marcos;
     std::vector<std::pair<int, int>> tlb;
     Metricas met;
+    InfoThrashing thr;  // métricas del detector de thrashing en este paso
 };
+
+// Bloque "thrashing" del estado.json (lo lee el dashboard para el detector, las alertas y los colores).
+inline std::string jsonThrashing(const InfoThrashing& t) {
+    std::ostringstream o;
+    o << std::fixed << std::setprecision(3);
+    o << "{\"estado\": \"" << nombreEstadoThr(t.estado) << "\""
+      << ", \"ventana\": " << t.ventana << ", \"umbral\": " << t.umbral
+      << ", \"accesosVentana\": " << t.accesosVentana << ", \"fallosVentana\": " << t.fallosVentana
+      << ", \"tasaVentana\": " << t.tasaVentana << ", \"wss\": " << t.wss << ", \"marcos\": " << t.marcos
+      << ", \"cpuVentana\": " << t.cpuVentana << ", \"cpuTotal\": " << t.cpuTotal
+      << ", \"pasosThrashing\": " << t.pasosThrashing << ", \"episodios\": " << t.episodios
+      << ", \"entra\": " << (t.entra ? "true" : "false") << ", \"sale\": " << (t.sale ? "true" : "false") << "}";
+    return o.str();
+}
 
 inline std::string aJson(const Instantanea& s, const std::deque<Instantanea>& historial) {
     std::ostringstream o;
@@ -32,6 +49,7 @@ inline std::string aJson(const Instantanea& s, const std::deque<Instantanea>& hi
       << "  \"terminado\": " << (s.paso == s.total ? "true" : "false") << ",\n"
       << "  \"metricas\": {\"accesos\": " << s.met.accesos << ", \"tlbHits\": " << s.met.tlbHits
       << ", \"tlbMisses\": " << s.met.tlbMisses << ", \"pageFaults\": " << s.met.pageFaults << "},\n"
+      << "  \"thrashing\": " << jsonThrashing(s.thr) << ",\n"
       << "  \"marcosEstado\": [";
     for (size_t i = 0; i < s.marcos.size(); i++) o << (i ? ", " : "") << s.marcos[i];
     o << "],\n  \"tlbEstado\": [";
@@ -44,7 +62,8 @@ inline std::string aJson(const Instantanea& s, const std::deque<Instantanea>& hi
           << ", \"pagina\": " << t.pagina << ", \"tlbHit\": " << (t.tlbHit ? "true" : "false")
           << ", \"fallo\": " << (t.fallo ? "true" : "false") << ", \"marco\": " << t.marco
           << ", \"dirLogica\": " << t.dirLogica << ", \"dirFisica\": " << t.dirFisica
-          << ", \"victima\": " << t.paginaVictima << "}";
+          << ", \"victima\": " << t.paginaVictima
+          << ", \"thr\": \"" << nombreEstadoThr(historial[i].thr.estado) << "\"}";
     }
     o << "\n  ]\n}\n";
     return o.str();

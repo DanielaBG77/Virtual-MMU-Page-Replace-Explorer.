@@ -92,8 +92,12 @@ class Manejador(SimpleHTTPRequestHandler):
                 raise ValueError("secuencia invalida")
             ruta = os.path.join(RAIZ, "pruebas", seq)
             if url.path == "/api/belady":
-                r = subprocess.run([SIMULADOR, ruta, "3", "belady"], cwd=RAIZ, capture_output=True, timeout=30)
-                return self.responder({"ok": r.returncode == 0, "error": r.stderr.decode()[:200]})
+                # Dos tablas de datos para las graficas: Belady (fallos vs marcos) y thrashing (CPU util vs marcos)
+                for modo in ("belady", "thrashing"):
+                    r = subprocess.run([SIMULADOR, ruta, "3", modo], cwd=RAIZ, capture_output=True, timeout=30)
+                    if r.returncode != 0:
+                        return self.responder({"ok": False, "error": r.stderr.decode()[:200]})
+                return self.responder({"ok": True, "error": ""})
             alg = q["alg"][0]
             if alg != "todos" and alg not in ALGORITMOS:
                 raise ValueError("algoritmo invalido")

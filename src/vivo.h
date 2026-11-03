@@ -30,7 +30,8 @@ inline bool escribirAtomico(const std::string& ruta, const std::string& contenid
 }
 
 inline int ejecutarVivo(const std::vector<int>& secuencia, const std::string& algoritmo,
-                        int marcos, size_t tamTLB, int retrasoMs, const std::string& rutaJson) {
+                        int marcos, size_t tamTLB, int retrasoMs, const std::string& rutaJson,
+                        ParamThrashing pt = ParamThrashing()) {
     std::error_code ec;
     std::filesystem::path carpeta = std::filesystem::path(rutaJson).parent_path();
     if (!carpeta.empty()) std::filesystem::create_directories(carpeta, ec);
@@ -42,6 +43,7 @@ inline int ejecutarVivo(const std::vector<int>& secuencia, const std::string& al
     std::thread productor([&] {
         CierraAlSalir cierre{cola};
         MMU mmu(marcos, tamTLB, crearPolitica(algoritmo, marcos, secuencia));
+        DetectorThrashing detector(marcos, pt);  // también es propiedad exclusiva del productor
         for (size_t i = 0; i < secuencia.size(); i++) {
             long long dir = static_cast<long long>(secuencia[i]) * MMU::tamPagina() +
                             static_cast<long long>((i * 37) % MMU::tamPagina());
@@ -55,6 +57,7 @@ inline int ejecutarVivo(const std::vector<int>& secuencia, const std::string& al
             s.marcos = mmu.estadoMarcos();
             s.tlb.assign(mmu.estadoTLB().begin(), mmu.estadoTLB().end());
             s.met = mmu.metricas();
+            s.thr = detector.registrar(s.tr.pagina, s.tr.fallo);
             cola.push(std::move(s));
             if (retrasoMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(retrasoMs));
         }
@@ -76,7 +79,10 @@ inline int ejecutarVivo(const std::vector<int>& secuencia, const std::string& al
             std::cout << "Paso " << s.paso << "/" << s.total << " | pagina " << s.tr.pagina
                       << " | TLB " << (s.tr.tlbHit ? "HIT " : "MISS") << " | "
                       << (s.tr.fallo ? "PAGE FAULT" : "en RAM") << " | fallos acumulados: "
-                      << s.met.pageFaults << std::endl;
+                      << s.met.pageFaults << " | " << nombreEstadoThr(s.thr.estado)
+                      << " (WSS " << s.thr.wss << "/" << s.thr.marcos << " marcos)" << std::endl;
+            if (s.thr.entra) std::cout << "   >>> ENTRA EN THRASHING (paso " << s.paso << ")" << std::endl;
+            if (s.thr.sale)  std::cout << "   <<< SALE DE THRASHING (paso " << s.paso << ")" << std::endl;
         }
     });
 

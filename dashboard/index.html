@@ -34,6 +34,24 @@
   .leyenda span { margin-right:14px; font-size:13px; }
   .blq { margin-bottom:10px; } .blq .nom { font-size:13px; font-weight:700; margin-bottom:4px; }
   table.tlb { width:100%; border-collapse:collapse; font-size:13px; } table.tlb th, table.tlb td { text-align:left; padding:6px 8px; border-bottom:1px solid #e4e7ef; } table.tlb th { color:var(--mut); font-weight:600; }
+
+  /* ---- Thrashing ---- */
+  .badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:700; color:#fff; vertical-align:middle; }
+  .badge.NORMAL { background:var(--ok); } .badge.ALERTA { background:#e8a21a; } .badge.THRASHING { background:var(--bad); animation:pulso 1s infinite; }
+  @keyframes pulso { 50% { opacity:.55; } }
+  @keyframes vibra { 0%,100% { transform:translateX(0); } 25% { transform:translateX(-2px); } 75% { transform:translateX(2px); } }
+  #banner { display:none; margin:12px 16px 0; padding:12px 16px; border-radius:10px; font-size:14px; line-height:1.4; }
+  #banner.THRASHING { display:block; background:#fde8e8; color:#9b1c1c; border:2px solid var(--bad); }
+  #banner.ALERTA { display:block; background:#fff4de; color:#7a5200; border:2px solid #e8a21a; }
+  #banner.NORMAL { display:block; background:#e6f6ef; color:#14664a; border:2px solid var(--ok); }
+  .m.ocup.thr { background:#fde8e8; border-color:var(--bad); animation:vibra .3s infinite; }
+  .thrgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px; }
+  .thrcard { border:2px solid #d5d9e4; border-radius:10px; padding:12px; font-size:13px; }
+  .thrcard.THRASHING { border-color:var(--bad); background:#fff7f7; } .thrcard.ALERTA { border-color:#e8a21a; background:#fffaf0; }
+  .thrcard .nom { font-size:14px; font-weight:700; margin-bottom:8px; } .thrcard .kv { margin:4px 0; }
+  .bar.u { position:relative; } .bar.u i { position:absolute; top:0; bottom:0; width:2px; background:#1d2433; }
+  .rojo { color:var(--bad); }
+  @media (prefers-reduced-motion: reduce) { .badge.THRASHING, .m.ocup.thr { animation:none; } }
 </style>
 </head>
 <body>
@@ -56,6 +74,7 @@
   <button id="btnVivo">▶ Ejecutar</button>
 </div>
 <div id="aviso"></div>
+<div id="banner" role="status" aria-live="polite"></div>
 
 <main>
   <section>
@@ -77,6 +96,11 @@
     <div id="tlbMulti"></div>
   </section>
   <section class="wide">
+    <h2>Detector de thrashing</h2>
+    <div id="thrPanel" class="thrgrid"><span class="mut">Pulsa Ejecutar para ver el detector en acción.</span></div>
+    <p class="mut" id="thrExplica"><b>Thrashing</b> (hiperpaginación): la RAM no alcanza para el <b>conjunto de trabajo</b> del proceso, casi cada acceso es un page fault y el sistema pasa más tiempo haciendo swap con el disco que ejecutando. Se detecta cuando, en los últimos Δ accesos, las páginas distintas (WSS) superan los marcos <b>y</b> la tasa de page faults llega al umbral. <b>Alerta</b> = el WSS ya no cabe pero todavía no falla tanto.</p>
+  </section>
+  <section class="wide">
     <h2>Avance en vivo: fallos acumulados por paso</h2>
     <div class="leyenda" id="vivoLeyenda"></div>
     <svg id="vivoGraf" viewBox="0 0 640 220" width="100%"></svg>
@@ -86,6 +110,12 @@
     <div id="leyenda" class="leyenda"></div>
     <svg id="grafica" viewBox="0 0 640 280" width="100%"></svg>
     <p class="mut" id="belady">Al presionar Ejecutar, un marcador por algoritmo sube con los fallos acumulados. Con un solo algoritmo, su línea se resalta.</p>
+  </section>
+  <section class="wide">
+    <h2>Utilización de CPU vs. marcos asignados (curva de thrashing)</h2>
+    <div id="cpuLeyenda" class="leyenda"></div>
+    <svg id="grafCpu" viewBox="0 0 640 280" width="100%"></svg>
+    <p class="mut" id="cpuTxt">Al presionar Ejecutar se calcula la utilización de CPU con 1 a 7 marcos. Los círculos rojos marcan cuántos marcos producen thrashing.</p>
   </section>
 </main>
 <script>
@@ -105,19 +135,20 @@ function aviso(t) { $('aviso').textContent = t || ''; }
 
 const ALGS = ['fifo', 'lru', 'reloj', 'optimo'];
 const NOMBRES = { fifo:'FIFO', lru:'LRU', reloj:'Reloj', optimo:'Óptimo' };
-let datosBelady = null, ultimosEstados = null, puntos = {};
+let datosBelady = null, datosThr = null, ultimosEstados = null, puntos = {}, pasosThr = {};
 
 function marcosHtml(e) {
   const h = e.historial[e.historial.length - 1];
+  const thr = e.thrashing && e.thrashing.estado === 'THRASHING';
   return '<div class="frames">' + e.marcosEstado.map((p, i) =>
-    `<div class="m ${p < 0 ? 'libre' : 'ocup'}${h && h.marco === i ? ' act' : ''}"><small>Marco ${i}</small><b>${p < 0 ? 'libre' : 'Pág ' + p}</b></div>`).join('') + '</div>';
+    `<div class="m ${p < 0 ? 'libre' : 'ocup'}${thr ? ' thr' : ''}${h && h.marco === i ? ' act' : ''}"><small>Marco ${i}</small><b>${p < 0 ? 'libre' : 'Pág ' + p}</b></div>`).join('') + '</div>';
 }
 function ultimoHtml(e, multi) {
   const h = e.historial[e.historial.length - 1];
   if (!h) return '';
   const pre = multi ? `<b style="color:${COLORES[e.algoritmo]}">${NOMBRES[e.algoritmo]}</b>: ` : '';
   return pre + `dir lógica ${h.dirLogica} → pág ${h.pagina}: ` +
-    (h.fallo ? `<span class="fallo">PAGE FAULT</span>` + (h.victima >= 0 ? ` (sale pág ${h.victima})` : '') : `<span class="hit">en RAM</span>`) +
+    (h.fallo ? `<span class="fallo">PAGE FAULT</span>` + (h.victima >= 0 ? ` (swap: sale pág ${h.victima}, entra pág ${h.pagina})` : '') : `<span class="hit">en RAM</span>`) +
     ` · dir física ${h.dirFisica}`;
 }
 
@@ -125,10 +156,12 @@ function pintarEstados(es) {
   const multi = es.length > 1, e0 = es[0];
   const paso = Math.min(...es.map(e => e.paso)), fin = es.every(e => e.terminado);
   $('estado').innerHTML = (multi ? `Comparando <b>los ${es.length} algoritmos</b>` : `Algoritmo <b>${NOMBRES[e0.algoritmo]}</b>`) +
-    ` · ${e0.marcos} marcos · paso ${paso}/${e0.total}` + (fin ? ' · <b>terminado</b>' : ' · en ejecución...');
+    ` · ${e0.marcos} marcos · paso ${paso}/${e0.total}` + (fin ? ' · <b>terminado</b>' : ' · en ejecución...') +
+    (es.some(e => e.thrashing && e.thrashing.estado === 'THRASHING') ? ' · <span class="badge THRASHING">THRASHING</span>' : '');
   $('marcosMapa').innerHTML = es.map(e => `<div class="blq">` +
     (multi ? `<div class="nom" style="color:${COLORES[e.algoritmo]}">${NOMBRES[e.algoritmo]}</div>` : '') + marcosHtml(e) + `</div>`).join('');
   $('ultimo').innerHTML = es.map(e => ultimoHtml(e, multi)).join('<br>');
+  pintarThrashing(es);
   $('tlbSingle').style.display = multi ? 'none' : '';
   if (multi) {
     $('tlbMulti').innerHTML = '<table class="tlb"><tr><th>Algoritmo</th><th>TLB hits</th><th>Misses</th><th>% aciertos</th><th>Page Faults</th></tr>' +
@@ -143,6 +176,75 @@ function pintarEstados(es) {
     $('faults').textContent = m.pageFaults; $('accesos').textContent = m.accesos;
     $('tlbEntradas').innerHTML = e0.tlbEstado.map(t => `<span>pág ${t.pagina} → marco ${t.marco}</span>`).join('') || '<span>vacío</span>';
   }
+}
+
+function pintarThrashing(es) {
+  const con = es.filter(e => e.thrashing);
+  if (!con.length) return;
+  const thr = con.filter(e => e.thrashing.estado === 'THRASHING'), alerta = con.filter(e => e.thrashing.estado === 'ALERTA');
+  const nom = l => l.map(e => NOMBRES[e.algoritmo]).join(', '), b = $('banner');
+  if (thr.length) {
+    const t = thr[0].thrashing;
+    b.className = 'THRASHING';
+    b.innerHTML = `⚠ <b>THRASHING</b> en ${nom(thr)}: el conjunto de trabajo (${t.wss} págs) no cabe en ${t.marcos} marcos y el ${Math.round(100 * t.tasaVentana)}% de los últimos ${t.accesosVentana} accesos fueron page faults. El sistema pasa más tiempo haciendo swap que ejecutando (CPU útil ${Math.round(100 * thr[0].thrashing.cpuVentana)}%).`;
+  } else if (alerta.length) {
+    const t = alerta[0].thrashing;
+    b.className = 'ALERTA';
+    b.innerHTML = `Alerta en ${nom(alerta)}: el conjunto de trabajo (${t.wss} págs) ya supera los ${t.marcos} marcos. Todavía fallan pocas páginas, pero está cerca del thrashing.`;
+  } else {
+    b.className = 'NORMAL';
+    b.innerHTML = 'Sin thrashing: el conjunto de trabajo cabe en la RAM.';
+  }
+  $('thrPanel').innerHTML = con.map(e => {
+    const t = e.thrashing, tasa = Math.round(100 * t.tasaVentana), cpu = Math.round(100 * t.cpuVentana), um = Math.round(100 * t.umbral);
+    return `<div class="thrcard ${t.estado}">
+      <div class="nom"><b style="color:${COLORES[e.algoritmo]}">${NOMBRES[e.algoritmo]}</b> <span class="badge ${t.estado}">${t.estado}</span></div>
+      <div class="kv">Conjunto de trabajo (últimos ${t.ventana} accesos): <b class="${t.wss > t.marcos ? 'rojo' : ''}">${t.wss} págs</b> vs <b>${t.marcos} marcos</b></div>
+      <div class="mut">Page faults en la ventana: <b>${t.fallosVentana}/${t.accesosVentana}</b> = ${tasa}% (umbral ${um}%)</div>
+      <div class="bar u"><div style="width:${tasa}%;background:${tasa >= um ? 'var(--bad)' : 'var(--ok)'}"></div><i style="left:${um}%"></i></div>
+      <div class="mut">CPU útil en la ventana: <b>${cpu}%</b></div>
+      <div class="bar"><div style="width:${cpu}%;background:${cpu < 30 ? 'var(--bad)' : cpu < 60 ? '#e8a21a' : 'var(--ok)'}"></div></div>
+      <div class="kv mut">Pasos en thrashing: <b>${t.pasosThrashing}</b> de ${e.paso} · episodios: <b>${t.episodios}</b> · CPU útil acumulada: <b>${Math.round(100 * t.cpuTotal)}%</b></div>
+    </div>`;
+  }).join('');
+}
+
+function pintarCpu(d, es) {
+  const W = 640, H = 280, L = 40, R = 16, T = 12, B = 32;
+  const x = i => L + i * (W - L - R) / (d.marcos.length - 1), y = v => H - B - v * (H - B - T) / 100;
+  const unico = es && es.length === 1 ? es[0].algoritmo : null;
+  let s = '';
+  for (let v = 0; v <= 100; v += 20) s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e4e7ef"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}%</text>`;
+  d.marcos.forEach((n, i) => s += `<text x="${x(i)}" y="${H - 14}" text-anchor="middle">${n}</text>`);
+  s += `<text x="${W / 2}" y="${H - 1}" text-anchor="middle">Marcos asignados</text>`;
+  for (const [alg, ser] of Object.entries(d.series)) {
+    const op = unico && unico !== alg ? 0.25 : 1, c = COLORES[alg] || '#555';
+    s += `<g opacity="${op}"><polyline fill="none" stroke="${c}" stroke-width="${alg === 'fifo' ? 7 : 2.5}" points="${ser.cpu.map((v, i) => x(i) + ',' + y(v)).join(' ')}"/>`;
+    ser.cpu.forEach((v, i) => {
+      if (ser.pasosThr[i] > 0) s += `<circle cx="${x(i)}" cy="${y(v)}" r="${alg === 'fifo' ? 11 : 8}" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="3 2"/>`;
+      s += `<circle cx="${x(i)}" cy="${y(v)}" r="3" fill="${c}"/>`;
+    });
+    s += '</g>';
+  }
+  if (es && es.length) {  // marcadores en vivo: CPU útil acumulada de cada algoritmo que corre ahora
+    const i = d.marcos.indexOf(es[0].marcos);
+    if (i >= 0) {
+      s += `<line x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}" stroke="#888" stroke-dasharray="4 4" opacity=".6"/>`;
+      es.filter(e => e.thrashing).forEach((e, k) => {
+        const c = COLORES[e.algoritmo] || '#555', v = 100 * e.thrashing.cpuTotal;
+        s += `<circle cx="${x(i)}" cy="${y(v)}" r="${es.length > 1 ? 7 + (es.length - 1 - k) * 3 : 8}" fill="#fff" fill-opacity=".4" stroke="${c}" stroke-width="3"/>`;
+        s += `<text x="${x(i) + 16}" y="${es.length > 1 ? T + 14 + k * 16 : y(v) + 4}" style="font-size:13px;font-weight:700;fill:${c}">${NOMBRES[e.algoritmo]}: ${Math.round(v)}%</text>`;
+      });
+    }
+  }
+  $('grafCpu').innerHTML = s;
+  $('cpuLeyenda').innerHTML = Object.keys(d.series).map(a => `<span style="color:${COLORES[a]}">● ${NOMBRES[a] || a}</span>`).join('') +
+    '<span style="color:#d64545">◌ hubo thrashing con esa cantidad de marcos</span>';
+  const minimos = Object.entries(d.series).map(([a, ser]) => {
+    const k = ser.pasosThr.findIndex(v => v === 0);
+    return `${NOMBRES[a] || a}: ${k >= 0 ? d.marcos[k] + ' marcos' : 'no desaparece'}`;
+  }).join(' · ');
+  $('cpuTxt').innerHTML = `<b>Marcos mínimos sin thrashing</b> (ventana Δ=${d.ventana}, un page fault cuesta ${d.costoFallo}× un acceso): ${minimos}. Con menos marcos la CPU útil se desploma porque casi todo el tiempo se va en swap.`;
 }
 
 function pintarGrafica(d, es) {
@@ -189,16 +291,27 @@ function pintarVivo(es) {
   for (const e of es) {
     const p = puntos[e.algoritmo] || (puntos[e.algoritmo] = {});
     if (e.paso < Math.max(0, ...Object.keys(p).map(Number))) for (const k of Object.keys(p)) delete p[k];
-    p[e.paso] = { f: e.metricas.pageFaults, h: e.metricas.tlbHits };
+    const pt = pasosThr[e.algoritmo] || (pasosThr[e.algoritmo] = {});
+    if (e.paso <= 1) for (const k of Object.keys(pt)) delete pt[k];
+    for (const h of e.historial) pt[h.paso] = h.thr === 'THRASHING';
+    p[e.paso] = { f: e.metricas.pageFaults, h: e.metricas.tlbHits, t: e.thrashing ? e.thrashing.estado : 'NORMAL' };
   }
   const W = 640, H = 220, L = 40, R = 16, T = 12, B = 30, N = Math.max(es[0].total, 2);
   const x = i => L + (i - 1) * (W - L - R) / (N - 1);
   const y = v => H - B - v * (H - B - T) / N;
   let s = '';
   for (let v = 0; v <= N; v += Math.ceil(N / 6)) s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#e4e7ef"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
-  for (let i = 1; i <= N; i++) s += `<text x="${x(i)}" y="${H - 12}" text-anchor="middle">${i}</text>`;
+  const salto = Math.ceil(N / 12);
+  for (let i = 1; i <= N; i++) if (i === 1 || i % salto === 0 || i === N) s += `<text x="${x(i)}" y="${H - 12}" text-anchor="middle">${i}</text>`;
   s += `<text x="${W / 2}" y="${H - 1}" text-anchor="middle">Paso de la simulación</text>`;
   const series = [];
+  const paso = (W - L - R) / (N - 1);  // ancho de un paso: se sombrean los pasos en thrashing
+  es.forEach((e, k) => {
+    const d = pasosThr[e.algoritmo] || {};
+    for (const i of Object.keys(d).map(Number)) if (d[i])
+      s += multi ? `<rect x="${x(i) - paso / 2}" y="${T + k * 5}" width="${paso}" height="4" fill="${COLORES[e.algoritmo]}"/>`
+                 : `<rect x="${x(i) - paso / 2}" y="${T}" width="${paso}" height="${H - B - T}" fill="#d64545" opacity=".14"/>`;
+  });
   if (multi) es.forEach(e => series.push({ nombre: NOMBRES[e.algoritmo] + ' (fallos)', color: COLORES[e.algoritmo], datos: puntos[e.algoritmo], k: 'f', ancho: e.algoritmo === 'fifo' ? 6 : 2.5 }));
   else {
     series.push({ nombre: 'Page Faults', color: '#d64545', datos: puntos[es[0].algoritmo], k: 'f', ancho: 2.5 });
@@ -210,11 +323,13 @@ function pintarVivo(es) {
     pasos.forEach(i => s += `<circle cx="${x(i)}" cy="${y(sr.datos[i][sr.k])}" r="3.5" fill="${sr.color}"/>`);
   }
   $('vivoGraf').innerHTML = s;
-  $('vivoLeyenda').innerHTML = series.map(sr => `<span style="color:${sr.color}">● ${sr.nombre}</span>`).join('');
+  $('vivoLeyenda').innerHTML = series.map(sr => `<span style="color:${sr.color}">● ${sr.nombre}</span>`).join('') +
+    (multi ? '<span>▬ franjas de arriba = pasos en thrashing</span>' : '<span style="color:#d64545">▮ zona de thrashing</span>');
 }
 
 async function cargarGrafica() {
   try { datosBelady = await leer('belady.json'); pintarGrafica(datosBelady, ultimosEstados); } catch (_) {}
+  try { datosThr = await leer('thrashing.json'); pintarCpu(datosThr, ultimosEstados); } catch (_) {}
 }
 async function cargarSecuencias() {
   try {
@@ -235,8 +350,10 @@ $('btnVivo').onclick = () => conBoton($('btnVivo'), async () => {
   const g = await accion('/api/belady?seq=' + seq);          // 1) recalcula la comparacion de los 4 algoritmos
   if (!g.ok) { aviso(g.error || 'No se pudo generar la gráfica.'); return; }
   await cargarGrafica();
-  puntos = {}; ultimosEstados = null; $('vivoGraf').innerHTML = '';   // 2) reinicia las graficas en vivo
+  puntos = {}; pasosThr = {}; ultimosEstados = null; $('vivoGraf').innerHTML = '';   // 2) reinicia las graficas en vivo
   if (datosBelady) pintarGrafica(datosBelady, null);
+  if (datosThr) pintarCpu(datosThr, null);
+  $('banner').className = '';
   const q = new URLSearchParams({ seq: $('seq').value, alg: $('alg').value, marcos: $('marcos').value, ms: $('ms').value });
   const r = await accion('/api/vivo?' + q);                   // 3) lanza la simulacion (uno o los cuatro)
   if (!r.ok) aviso(r.error || 'No se pudo iniciar la simulación.');
@@ -249,6 +366,7 @@ async function ciclo() {
     if (!es.length) return;
     pintarEstados(es); pintarVivo(es); ultimosEstados = es;
     if (datosBelady) pintarGrafica(datosBelady, es);
+    if (datosThr) pintarCpu(datosThr, es);
   } catch (_) {}
 }
 cargarSecuencias(); cargarGrafica(); ciclo(); setInterval(ciclo, 500);
